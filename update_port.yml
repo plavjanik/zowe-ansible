@@ -1,0 +1,39 @@
+- name: Update server port and recycle
+  hosts: ca32
+  gather_facts: no
+  tasks:
+  - name: Display all variables/facts known for a host
+    debug:
+      var: hostvars[inventory_hostname]
+    tags: debug_info
+  - set_fact:
+      server_port: "{{ lookup('ini', 'SERVER_PORT type=properties file=config.env') }}"
+  - name: Update PARMLIB member
+    local_action:
+      module: shell
+      args: zowe zos-files upload file-to-data-set config.env "MFAAS.SDK.PARMLIB(ZWEPSDK)" --zosmf-profile {{ zowe_profile }}
+    register: "update"
+  - debug: var=update
+  - name: List STCs
+    local_action:
+      module: shell
+      args: "zowe jobs list jobs --prefix ZWEPSDK --zosmf-profile {{ zowe_profile }} | grep ACTIVE || true"
+    register: "active_stcs"
+  - debug: var=active_stcs.stdout_lines
+  - name: Stop STC if active
+    when: active_stcs.stdout_lines|length == 1
+    local_action:
+      module: shell
+      args: zowe console issue command "P ZWEPSDK" --zosmf-profile {{ zowe_profile }}
+  - name: Start STC
+    local_action:
+      module: shell
+      args: zowe console issue command "S ZWEPSDK" --zosmf-profile {{ zowe_profile }}
+  - name: Wait until a URL is reachable from this host (port {{ server_port }})
+    uri:
+        url: "https://{{ ansible_ssh_host }}:{{ server_port }}/actuator/health"
+        validate_certs: no
+    register: _result
+    until: _result.status == 200
+    retries: 12  # 10 * 5 seconds = 1 minute
+    delay: 5  # Every 5 seconds
